@@ -1,11 +1,9 @@
 package se.sprinto.hakan.chatapp;
 
-import se.sprinto.hakan.chatapp.dao.MessageDAO;
-import se.sprinto.hakan.chatapp.dao.MessageListDAO;
-import se.sprinto.hakan.chatapp.dao.UserDAO;
-import se.sprinto.hakan.chatapp.dao.UserListDAO;
+import se.sprinto.hakan.chatapp.service.MessageService;
 import se.sprinto.hakan.chatapp.model.Message;
 import se.sprinto.hakan.chatapp.model.User;
+import se.sprinto.hakan.chatapp.service.Login;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -18,15 +16,19 @@ public class ClientHandler implements Runnable {
 
     private final Socket socket;
     private final ChatServer server;
+    private final Login login;
+    private final MessageService messageService;
+
+
     private PrintWriter out;
     private User user;
 
-    private final UserDAO userDAO = new UserListDAO();
-    private final MessageDAO messageDAO = new MessageListDAO();
-
-    ClientHandler(Socket socket, ChatServer server) {
+    ClientHandler(Socket socket, ChatServer server, Login login, MessageService messageService) {
         this.socket = socket;
         this.server = server;
+        this.login = login;
+        this.messageService = messageService;
+
     }
 
     public User getUser() {
@@ -41,36 +43,57 @@ public class ClientHandler implements Runnable {
 
         ) {
             this.out = writer;
+            writer.println("Välkommen!");
 
-            writer.println("Välkommen! Har du redan ett konto? (ja/nej)");
-            String answer = in.readLine();
+            while (user == null) {
+                writer.println("Har du redan ett konto? (ja/nej)");
+                String answer = in.readLine();
 
-            if ("ja".equalsIgnoreCase(answer)) {
-                writer.println("Ange användarnamn:");
-                String username = in.readLine();
-                writer.println("Ange lösenord:");
-                String password = in.readLine();
-
-                user = userDAO.login(username, password);
-                if (user == null) {
-                    writer.println("Fel användarnamn eller lösenord.");
-                    writer.println("Du måste skriva /quit nu för att avsluta denna klient");
-                    writer.println("Pröva att återansluta med en ny klient");
-                    
+                if (answer == null || answer.equalsIgnoreCase("/quit")) {
+                    return;
                 }
-            } else {
-                writer.println("Skapa nytt konto. Ange användarnamn:");
-                String username = in.readLine();
-                writer.println("Ange lösenord:");
-                String password = in.readLine();
-                user = userDAO.register(new User(username, password));
-                writer.println("Konto skapat. Välkommen, " + user.getUsername() + "!");
-            }
 
-            writer.println("Du är inloggad som: " + user.getUsername() + "");
-            writer.println("Nu kan du börja skriva meddelanden");
-            writer.println("Skriv /quit för att avsluta");
-            writer.println("Skriv /mymsgs för att lista alla dina meddelanden");
+                if ("ja".equalsIgnoreCase(answer)) {
+                    writer.println("Ange användarnamn:");
+                    String username = in.readLine();
+                    writer.println("Ange lösenord:");
+                    String password = in.readLine();
+
+
+                    user = login.login(username, password);
+
+                    if (user == null) {
+                        writer.println("Fel användarnamn eller lösenord. Försök igen.");
+                    }
+                } else {
+                    writer.println("Skapa nytt konto. Ange användarnamn:");
+                    String username = in.readLine();
+                    writer.println("Ange lösenord:");
+                    String password = in.readLine();
+                    user = login.registerUser(new User(username, password));
+                    if (user != null) {
+                        writer.println("Konto skapat. Välkommen, " + user.getUsername() + "!");
+                    } else {
+                        writer.println("Kunde inte skapa konto, försök igen.");
+
+            }
+        }
+    }
+                writer.println("Du är inloggad som: " + user.getUsername() + "");
+                List<Message> messagesAndUser = messageService.leftJoinShowTextWhenLogin(user.getId());
+
+                if (messagesAndUser.isEmpty()) {
+                    out.println("Inga tidigare meddelanden.");
+                } else {
+                    out.println("Dina meddelanden.");
+                    for (Message m : messagesAndUser) {
+                        out.println(user.getUsername() + "[" + m.getTimestamp() + "]" + m.getText());
+                    }
+                }
+
+                writer.println("Nu kan du börja skriva meddelanden");
+                writer.println("Skriv /quit för att avsluta");
+                writer.println("Skriv /mymsgs för att lista alla dina meddelanden");
 
             System.out.println(user.getUsername() + " anslöt.");
 
@@ -79,8 +102,9 @@ public class ClientHandler implements Runnable {
                 if (message.equalsIgnoreCase("/quit")) {
                     break;
                 } else if (message.equalsIgnoreCase("/mymsgs")) {
-                    // Hämta meddelanden för denna användare
-                    List<Message> messages = messageDAO.getMessagesByUserId(user.getId());
+
+                    List<Message> messages = messageService.getMessagesForUser(user.getId());
+
                     if (messages.isEmpty()) {
                         out.println("Inga sparade meddelanden.");
                     } else {
@@ -91,7 +115,7 @@ public class ClientHandler implements Runnable {
                     }
                 } else {
                     server.broadcast(message, this);
-                    messageDAO.saveMessage(new Message(user.getId(), message, java.time.LocalDateTime.now()));
+                    messageService.saveMessage(new Message(user.getId(), message, java.time.LocalDateTime.now()));
                 }
             }
 
